@@ -446,3 +446,32 @@ impl ReadCString for Cursor<Vec<u8>> {
         Ok(String::from_utf8_lossy(&str_vec[..]).into_owned())
     }
 }
+
+trait ReadBytes {
+    fn read_bytes_nullterm(&mut self) -> Result<Vec<u8>>;
+    fn read_bytes(&mut self, num: usize) -> Result<Vec<u8>>;
+}
+
+impl ReadBytes for Cursor<Vec<u8>> {
+    fn read_bytes_nullterm(&mut self) -> Result<Vec<u8>> {
+        let end = self.get_ref().len() as u64;
+        let mut buf = [0; 1];
+        let mut bytes = Vec::with_capacity(256);
+        while self.position() < end {
+            self.read_exact(&mut buf)?;
+            if buf[0] == 0 {
+                break;
+            } else {
+                bytes.push(buf[0]);
+            }
+        }
+        Ok(bytes)
+    }
+
+    fn read_bytes(&mut self, num: usize) -> Result<Vec<u8>> {
+        let mut bytes = Vec::with_capacity(num);
+        bytes.resize(num, 0);
+        self.read_exact(&mut bytes)?;
+        Ok(bytes)
+    }
+}

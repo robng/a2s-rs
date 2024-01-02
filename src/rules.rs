@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{Cursor, Seek, SeekFrom, Read};
 #[cfg(not(feature = "async"))]
 use std::net::ToSocketAddrs;
 
@@ -11,18 +11,21 @@ use tokio::net::ToSocketAddrs;
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{Error, Result};
-use crate::{A2SClient, ReadCString};
+use crate::{A2SClient, ReadBytes};
 
 const RULES_REQUEST: [u8; 5] = [0xFF, 0xFF, 0xFF, 0xFF, 0x56];
 
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-pub struct Rule {
-    /// Name of the rule.
-    pub name: String,
-
-    /// Value of the rule.
-    pub value: String,
+pub enum Rule {
+    Regular {
+        name: String,
+        value: String,
+    },
+    Mod {
+        id: u32,
+        name: String,
+    },
 }
 
 impl Rule {
@@ -43,10 +46,19 @@ impl Rule {
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        bytes.extend(self.name.as_bytes());
-        bytes.push(0);
-        bytes.extend(self.value.as_bytes());
-        bytes.push(0);
+        match self {
+            Rule::Regular { name, value } => {
+                bytes.extend(name.as_bytes());
+                bytes.push(0);
+                bytes.extend(value.as_bytes());
+                bytes.push(0);
+            },
+            Rule::Mod { id, name } => {
+                bytes.extend(name.as_bytes());
+                bytes.push(0);
+                bytes.extend(id.to_le_bytes());
+            },
+        }
 
         bytes
     }
@@ -58,17 +70,85 @@ impl Rule {
 
         let count = data.read_u16::<LittleEndian>()?;
 
-        let mut rules: Vec<Rule> = Vec::with_capacity(count as usize);
+        let mut rules = Vec::new();
+        let mut mod_bytes: Vec<u8> = Vec::new();
 
-        for _ in 0..count {
-            rules.push(Rule {
-                name: data.read_cstring()?,
-                value: data.read_cstring()?,
-            })
+        let mut num_mods = 0u8;
+        let mut num_mod_rules = 0u8;
+
+        for i in 0..count {
+            let name = data.read_bytes_nullterm()?;
+            let value = data.read_bytes_nullterm()?;
+
+            if i == 0 {
+                num_mods = value.get(8).unwrap_or(&0).to_owned();
+                num_mod_rules = name.get(1).unwrap_or(&0).to_owned();
+            }
+
+            if
+                name.len() == 2 &&
+                name.get(1).is_some_and(|n| n == &num_mod_rules) &&
+                name.get(0).is_some_and(|n| n <= &num_mod_rules)
+            {
+                mod_bytes.extend(value);
+            } else {
+                rules.push(Rule::Regular {
+                    name: String::from_utf8_lossy(&name).to_string(),
+                    value: String::from_utf8_lossy(&value).to_string(),
+                });
+            }
+        }
+
+        let mut mods = unescape(&mut Cursor::new(mod_bytes))?;
+        mods.seek(SeekFrom::Start(9))?; // Skip header
+
+        for _ in 0..num_mods {
+            mods.seek(SeekFrom::Current(5))?;
+            let mod_id = mods.read_u32::<LittleEndian>()?;
+            let mod_name_len = mods.read_u8()?;
+            let mod_name = mods.read_bytes(mod_name_len as usize)?;
+            rules.push(Rule::Mod {
+                id: mod_id,
+                name: String::from_utf8_lossy(&mod_name).to_string(),
+            });
         }
 
         Ok(rules)
     }
+}
+
+fn unescape(bytes: &mut Cursor<Vec<u8>>) -> Result<Cursor<Vec<u8>>> {
+    let mut tmp_bytes: Vec<u8> = Vec::new();
+    bytes.read_to_end(&mut tmp_bytes)?;
+
+    let mut bytes = Vec::new();
+    let mut i = 0;
+    while i < tmp_bytes.len() {
+        if i < 9 { // skip header
+            bytes.push(tmp_bytes[i]);
+            i += 1;
+            continue;
+        }
+        let next_two_bytes = tmp_bytes.get(i..i+2).unwrap_or(&[0, 0]);
+        match next_two_bytes {
+            [0x01, 0x01] => {
+                bytes.push(0x01);
+                i += 1;
+            },
+            [0x01, 0x02] => {
+                bytes.push(0x00);
+                i += 1;
+            },
+            [0x01, 0x03] => {
+                bytes.push(0xFF);
+                i += 1;
+            },
+            _ => bytes.push(next_two_bytes[0]),
+        }
+        i += 1;
+    }
+
+    Ok(Cursor::new(bytes))
 }
 
 impl A2SClient {

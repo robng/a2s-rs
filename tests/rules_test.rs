@@ -3,9 +3,9 @@
 fn test_rules() {
     let client = a2s::A2SClient::new().unwrap();
 
-    let result = client.rules("play.maxdb.net:27015").unwrap();
+    let result = client.rules("189.127.165.117:2305").unwrap();
 
-    println!("{:?}", result);
+    println!("{:#?}", result);
 }
 
 #[cfg(not(feature = "async"))]
