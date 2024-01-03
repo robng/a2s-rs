@@ -78,10 +78,10 @@ impl Rule {
 
         for i in 0..count {
             let name = data.read_bytes_nullterm()?;
-            let value = data.read_bytes_nullterm()?;
+            let value = unescape(&mut data.read_bytes_nullterm()?)?;
 
             if i == 0 {
-                num_mods = value.get(8).unwrap_or(&0).to_owned();
+                num_mods = value.get(4).unwrap_or(&0).to_owned();
                 num_mod_rules = name.get(1).unwrap_or(&0).to_owned();
             }
 
@@ -99,8 +99,8 @@ impl Rule {
             }
         }
 
-        let mut mods = unescape(&mut Cursor::new(mod_bytes))?;
-        mods.seek(SeekFrom::Start(9))?; // Skip header
+        let mut mods = Cursor::new(mod_bytes);
+        mods.seek(SeekFrom::Start(5))?; // Skip header
 
         for _ in 0..num_mods {
             mods.seek(SeekFrom::Current(5))?;
@@ -117,38 +117,41 @@ impl Rule {
     }
 }
 
-fn unescape(bytes: &mut Cursor<Vec<u8>>) -> Result<Cursor<Vec<u8>>> {
+fn unescape(bytes: &mut Vec<u8>) -> Result<Vec<u8>> {
     let mut tmp_bytes: Vec<u8> = Vec::new();
-    bytes.read_to_end(&mut tmp_bytes)?;
-
+    Cursor::new(bytes).read_to_end(&mut tmp_bytes)?;
     let mut bytes = Vec::new();
     let mut i = 0;
+
     while i < tmp_bytes.len() {
-        if i < 9 { // skip header
-            bytes.push(tmp_bytes[i]);
-            i += 1;
-            continue;
+        let Some(curr_byte) = tmp_bytes.get(i) else { break; };
+        let is_escape_byte = curr_byte == &0x01;
+        if is_escape_byte {
+            let Some(next_byte) = tmp_bytes.get(i + 1) else { break; };
+            match next_byte {
+                0x01 => {
+                    bytes.push(0x01);
+                    i += 2;
+                    continue;
+                },
+                0x02 => {
+                    bytes.push(0x00);
+                    i += 2;
+                    continue;
+                },
+                0x03 => {
+                    bytes.push(0xFF);
+                    i += 2;
+                    continue;
+                },
+                _ => ()
+            }
         }
-        let next_two_bytes = tmp_bytes.get(i..i+2).unwrap_or(&[0, 0]);
-        match next_two_bytes {
-            [0x01, 0x01] => {
-                bytes.push(0x01);
-                i += 1;
-            },
-            [0x01, 0x02] => {
-                bytes.push(0x00);
-                i += 1;
-            },
-            [0x01, 0x03] => {
-                bytes.push(0xFF);
-                i += 1;
-            },
-            _ => bytes.push(next_two_bytes[0]),
-        }
+        bytes.push(*curr_byte);
         i += 1;
     }
 
-    Ok(Cursor::new(bytes))
+    Ok(bytes)
 }
 
 impl A2SClient {
