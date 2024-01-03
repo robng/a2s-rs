@@ -126,7 +126,7 @@ impl A2SClient {
 
         Ok(A2SClient {
             socket,
-            max_size: 1400,
+            max_size: 100000,
             app_id: 0,
         })
     }
@@ -135,7 +135,7 @@ impl A2SClient {
     pub async fn new() -> Result<A2SClient> {
         Ok(A2SClient {
             timeout: Duration::new(15, 0),
-            max_size: 1400,
+            max_size: 100000,
             app_id: 0,
         })
     }
